@@ -1,0 +1,1027 @@
+---
+title: "A run for their money: Fitness between two finance professors"
+author: "Aftikhar Mominzada and Justin Powley"
+format: 
+  html:
+    self-contained: true
+editor: visual
+---
+
+## Summary of Findings
+
+Hound prefers higher distance and lower speed whereas Collie prefers higher speed and lower distance.
+
+Both runners have consistent running habits. Collie is slightly more consistent.
+
+Hound gets less Aerobic Training Effects over the same distance, due to their lower speed overall. Hound gets the same level of exhaustion (Aerobic TE = 5) at lower speeds for runs under 10km.
+
+Hounds regression fails. Hound includes warmups, cooldowns, runs following other workouts, and runs with other people, which make their measurements more haphazard and are not diferentiable in terms of features.
+
+We use a clustering algorithm to group Hounds runs into features to address this.
+
+Collie is more agile, and has seen recent improvements in pace.
+
+Hound has seen recent improve in their stride length, suggesting a change in weight, pace, flexibility, form, or strength.
+
+We believe Collie is fitter and Hound has seen more improvement across more metrics.
+
+We want to coach Hound since we believe we can offer strategies to maximize benefits for shorter workouts.
+
+## Defining Fitness
+
+While there's no single universally agreed-upon definition, many definitions emphasize aspects such as physical health, performance, and overall well-being. Our generalized definition incorporates these aspects:
+
+Fitness can be defined as the ability of an individual to meet the demands of daily life and **physical activities efficiently**, while **maintaining physical health**, **endurance, strength, flexibility, and agility**. It encompasses not only physical attributes but also mental and emotional well-being, including factors such as **cardiovascular health**, **muscular strength and endurance, body composition, flexibility, coordination, balance**, and **psychological resilience**. Fitness is achieved through **regular physical activity,** and **healthy lifestyle habits,** and it varies based on individual goals, needs, and abilities.
+
+## Considerations for Fitness Data
+
+### Fitness data can be separated into 3 main categories:
+
+1.  Environment
+
+    Environment variables are variables in the workout environment not in control of the runner. It reflects aspects of the environment outside the runners control, such as the weather, hardness of the ground, and air density due to altitude. In the case of running data, it also indirectly reflects a runners behavior and preferences, since the runner chooses when to run, and when to avoid running due to less favorable conditions.
+
+2.  Body - Involuntary Response
+
+    Involuntary response variables refer to unconscious responses of the autonomic nervous system, such as breathing, heart rate, and sweating. Though the runner may have some control over these responses if they direct their focus towards them, they are typically automatic responses to stressors, and thus this kind of data has a degree of impartiality.
+
+3.  Body - Voluntary Response
+
+    Voluntary response variables are measures of how the body is behaving during exercise as a direct response to the runners decisions. Examples include the speed they choose to run, the distance they run, and when and under what conditions they choose to run. It is important to note that a voluntary response variable often has an involuntary limit. There is a fastest speed a runner can theoretically run at their current and all future potential levels of fitness. These bounds are a more fair representation than any individual measurement of a voluntary measure for any given run, because we can always make the argument that a runner could've chosen to run a little faster, or run a little farther, to demonstrate the limits of their abilities.
+
+## Preferred Habitat and Habits
+
+We will find that voluntary response and preferred habitat of our runners causes difficulties for direct comparison of our runners. One prefers faster runs at shorter distance whereas the other has frequented multiple races of longer length and run marathons at a slower pace:
+
+```{r Justin_Prereq, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+library(RTLedu)
+library(tidyverse)
+library(ggplot2)
+library(plotly)
+library(corrplot)
+library(lubridate)
+library(broom)
+library(patchwork)
+library(knitr)
+library(ggfortify)
+library(feasts)
+library(car)
+```
+
+```{r Justin_Data_In, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+data_raw <- RTLedu::strava
+data <- data_raw %>%
+  
+  group_by(Runner) %>%
+  
+  # Convert distance to common units (KM)
+  
+  dplyr::mutate(Distance_KM = case_when(
+    Activity.Type == "Track Running" ~ Distance/1000,
+    TRUE ~ Distance
+  )) %>%
+  
+  dplyr::arrange(Date) %>%
+  dplyr::mutate(Init = 1, Index = cumsum(Init)) %>% dplyr::select(-Init) %>%
+  dplyr::mutate(Days_Since_Last = Date - lag(Date)) %>%
+  dplyr::mutate(Elapsed_Sub_Moving = Time - Moving.Time) %>%
+  dplyr::mutate(pct_time_error = as.numeric(Elapsed_Sub_Moving) / as.numeric(seconds(Time))) %>%
+  dplyr::mutate(Average_Speed_MPS_Moving = (Distance_KM*1000)/as.numeric(seconds(Moving.Time))) %>%
+  dplyr::mutate(Average_Speed_MPS = (Distance_KM*1000)/as.numeric(seconds(Time))) %>%
+  dplyr::mutate(Avg.HR = as.numeric(Avg.HR), Aerobic.TE = as.numeric(Aerobic.TE)) %>%
+  dplyr::mutate(Avg.Pace = seconds(Time)/Distance_KM) %>% dplyr::rename(Avg.Pace.Sec = Avg.Pace) %>%
+  dplyr::mutate(Best.Pace = str_sub(Best.Pace, start = 1L, end = -4)) %>%
+  dplyr::mutate(Best.Pace = as.numeric(seconds(ms(Best.Pace)))) %>%
+  dplyr::mutate(Max_Speed_MPS = 1000/Best.Pace) %>%
+  dplyr::select(-Favorite,
+                -Avg.Vertical.Ratio, 
+                -Avg.Vertical.Oscillation, 
+                -Avg.Ground.Contact.Time, 
+                -Training.Stress.Score.,
+                -Avg.Power,
+                -Max.Power,
+                -Flow,
+                -Avg..Swolf,
+                -Avg.Stroke.Rate,
+                -Dive.Time,
+                -Surface.Interval,
+                -Decompression,
+                -Avg.Resp,
+                -Min.Resp,
+                -Max.Resp
+                ) %>%
+  dplyr::mutate(temp = case_when(Total.Ascent == "--" ~ 0,
+                                 TRUE ~ as.numeric(Total.Ascent))) %>%
+  dplyr::mutate(temp2 = case_when(Total.Descent == "--" ~ 0,
+                                 TRUE ~ as.numeric(Total.Descent))) %>%
+  dplyr::mutate(Total.Ascent = temp, Total.Descent = temp2) %>%
+  dplyr::select(-temp,-temp2) %>%
+  dplyr::mutate(Max.Elevation = as.numeric(Max.Elevation)) %>%
+  dplyr::mutate(stop_ratio = (seconds(Time)-seconds(Moving.Time))/seconds(Time)) %>%
+  dplyr::mutate(Max.HR = as.numeric(Max.HR))
+```
+
+```{r Justin_Preferred_Habitat, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+habitat_plot_dist <- data %>%
+  ggplot(aes(x=Distance_KM, col = Runner)) +
+  geom_histogram(aes(y=..count../sum(..count..))) +
+  theme(legend.position = "none") +
+  labs(x = "Distance (km)", y = "Density")
+
+habitat_plot_speed <- data %>%
+  ggplot(aes(x=Average_Speed_MPS, col = Runner)) +
+  geom_histogram(aes(y=..count../sum(..count..))) +
+  labs(x = "Average Speed (mps)", y = "Density")
+
+(habitat_plot_dist | habitat_plot_speed) + plot_annotation("Preferred Habitat of 2 Runners",theme=theme(plot.title=element_text(hjust=0.5)))
+```
+
+```{r, correlation_data, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+data_cor <- data %>% 
+  dplyr::select(-Title) %>%
+  dplyr::mutate(Date = as.numeric(Date)-17719,
+                Time = as.numeric(seconds(Time)),
+                Max.HR = as.numeric(Max.HR),
+                Avg.Run.Cadence = as.numeric(Avg.Run.Cadence),
+                Max.Run.Cadence = as.numeric(Max.Run.Cadence),
+                Avg.Pace.Sec = as.numeric(Avg.Pace.Sec)) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(Distance_KM,
+                Calories,
+                Time,
+                Avg.HR,
+                Max.HR,
+                Aerobic.TE,
+                Avg.Pace.Sec,
+                Best.Pace,
+                Avg.Stride.Length,
+                Average_Speed_MPS,
+                Runner) %>%
+  dplyr::mutate(Hound = case_when(Runner == "Hound" ~ 1,
+                                 TRUE ~ 0))
+```
+
+We can see very quickly where our runners get their names. Hound prefers a slower pace on average and will run longer distances, where as Collie prefers a faster pace at shorter distances. We also find out, because of the differences in range, least squares regression may have issues since comparisons of coefficients will be between non-comparable ranges for a large portion of our data. Because of this, we may opt for more analysis within each individual dataset to determine more qualitative elements to compare our runners on, in addition to quantitative analysis.
+
+Another important element of fitness is the consistency and habit building of the runner. Habits are neurological circuits that strengthen with repeated use. On the flip side, habits can atrophy when not used, or when replaced with a new, more appealing behavior. A runner who can maintain consistent and frequent running behavior will be more likely to remain fit. Lets take a look at how often Collie and Hound go for a run:
+
+```{r Justin_Habits1, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+HabitG6 <- data %>% 
+  dplyr::select(Date, Distance_KM, Runner) %>%
+  ggplot(aes(x = Date, y = Distance_KM)) +
+  facet_grid(rows = vars(Runner)) +
+  geom_point() +
+  labs(title = "Distance Ran by Day", x = "Date", y = "Distance (km)")
+
+HabitG3 <- data %>%
+  ggplot(aes(x=Days_Since_Last)) +
+  geom_histogram(aes(y = ..count../sum(..count..)), 
+                 bins = 127) +
+  facet_grid(cols = vars(Runner)) +
+  labs(title = "How long are the breaks between recorded runs?", x = "Days between runs", y = "Density")
+
+HabitG6
+HabitG3
+```
+
+As we can see from the second graph, both runners have fairly consistent running schedules most of the time, as demonstrated by the large peaks and right skewed data. It appears Collie is more consistent than Hound, though it is fitting to do a hypothesis test both ways to determine whether the averages are significantly different:
+
+```{r Justin_Habit_testing, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+h_habit_segment <- data %>% dplyr::ungroup() %>% dplyr::filter(Runner == "Hound") %>% dplyr::select(Days_Since_Last) %>% tidyr::drop_na() %>% dplyr::mutate(Days_Since_Last = as.numeric(Days_Since_Last)) %>% dplyr::filter(Days_Since_Last != 0)
+
+c_habit_segment <- data %>% dplyr::ungroup() %>% dplyr::filter(Runner == "Collie") %>% dplyr::select(Days_Since_Last) %>% tidyr::drop_na() %>% dplyr::mutate(Days_Since_Last = as.numeric(Days_Since_Last))
+
+habit_summary <- data %>% dplyr::select(Runner, Days_Since_Last) %>%
+  dplyr::mutate(Days_Since_Last = as.numeric(Days_Since_Last)) %>%
+  dplyr::filter(Days_Since_Last != 0) %>%
+  dplyr::mutate(temp = 1, obs = cumsum(temp)) %>%
+  dplyr::summarise(average = mean(Days_Since_Last),
+                   sd = sd(Days_Since_Last),
+                   n = max(obs),
+                   .groups = "keep")
+
+habit_summary <- habit_summary %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(se = sd/sqrt(n), temp=1, temp=(cumsum(temp)-2)/-1+1, 
+                z_score = (average-habit_summary$average[temp])/se,
+                p_value = pnorm(z_score, lower.tail = FALSE)) %>%
+  dplyr::select(-temp) %>%
+  dplyr::rename(Average = average)
+habit_summary$p_value[1] = 1 - habit_summary$p_value[1]
+
+kable(habit_summary)
+```
+
+With Collie having an average separation between days slightly lower than Hound we find they have been slightly more frequent in the past. Our p values indicate that there is reasonable significance in the difference, passing an 80% confidence test that Collie is more frequent than Hound in terms of running habits. You may note that the test only passes an 80% confidence level when run both ways, which is typically low for hypothesis testing. Since we are dealing with people, and their tendency to change, we can live with the uncertainty given the context.
+
+Side Note: Expect weaker hypothesis tests if using data to compare people. Humanizing hypothesis testing accounts for the fact that with the right core motivations, and changing goals between the two parties, the distributions can flip due to the switches in behaviour and circumstances. In short, if either wanted to move their average to 5 days a week, because they deemed it important enough to sacrifice on other things, either party likely could. We might consider factoring this in as "hypothesis testing for humans", which calls for more judgement depending on the circumstances in which it is applied.
+
+Finally, we will check to see how strong the relationship is with days between runs from the last run and today, and two runs prior. This will demonstrate whether consistency and breaks occur in self perpetuating streaks, or are unrelated in their occurrences to occurrences in the past.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+h_habit_acf <- acf(h_habit_segment$Days_Since_Last, plot = FALSE)
+plot(h_habit_acf, main = "Hound Running Habits (ACF)")
+h_habit_pacf <- pacf(h_habit_segment$Days_Since_Last, plot = FALSE)
+plot(h_habit_pacf, main = "Hound Running Habits (PACF)")
+c_habit_acf <- acf(c_habit_segment$Days_Since_Last, plot = FALSE)
+plot(c_habit_acf, main = "Collie Running Habits (ACF)")
+c_habit_pacf <- pacf(c_habit_segment$Days_Since_Last, plot = FALSE)
+plot(c_habit_pacf, main = "Collie Running Habits (PACF)")
+```
+
+Note, we ignore the first spike on each ACF chart since, data always perfectly correlates with itself if there is no lag. These charts show us there's little lagged correlation for hound and potentially some for Collie (since Collie's ACF has 3 significant spikes in a row). This indicates that Collie loses some momentum over 2-3 consecutive runs, as the time between runs gets slightly longer, however this could occur because Collie holds themselves to a slightly more consistent regimen, which would introduce the tendency to slip more due to a slightly more rigorous constraint. In short, we can conclude both runners have consistency in their habits, with Collie having slightly more consistency overall.
+
+#### Recap:
+
+1.  Hound prefers running longer distances on average at lower speeds in comparison to Collie. Collie prefers higher speed runs at a shorter fixed interval of distance.
+2.  Collie has a slightly higher average consistency than hound, and the difference is statistically significant. However, we expect that with the right motivation for either party this conclusion could invert.
+3.  We don't see any trend or seasonality that would suggest losing the running habit will be a problem for either runner.
+
+## Exploring Involuntary Response Variables
+
+As previously mentioned, involuntary response variables are ones which result not from the runners choices to run in a certain way and under certain conditions, but from the body responding to those particular conditions. An example would be how average heart rate responds to speed, distance and time running. In some cases, involuntary response variables are directly measurable, such as heart rate. However others are estimated using a model, which takes in a variety of measurements to predict another metric. Good examples of this are Calories burned and Aerobic Training Effect. The main benefit of considering involuntary responses is they give us a more fair estimate of a runners current level of fitness. Consider the following example:
+
+Two runners run the same distance and at the same speed. They run alongside one another to ensure fairness in terms of the difficulty of the run, in order to compare their overall fitness. At the end, their heart rates are measured at the same time to determine who is more strained by the exercise. Who is fitter, the one with the higher heart rate or the one with the lower?
+
+The one with the lower heart rate is likely fitter, under the assumption that heart rate rises the more strained someone is. We'll come back to this idea a little later when we discuss Aerobic Training Effect (Aerobic TE). For now, let's take a look at how heart rate responds to different variables:
+
+```{r include = FALSE}
+
+library(RTLedu)
+
+ft_dta <- RTLedu::strava
+
+```
+
+```{r echo=FALSE, results='hide', message=FALSE, warning=FALSE, error=FALSE, output.var='result'}
+
+library(patchwork)
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(hms)
+library(car)
+library(kableExtra)
+
+ft_dtaa <- RTLedu::strava
+
+ft_dta <- ft_dtaa %>%  select(Title, Activity.Type, Date, Distance, Calories, Time, Avg.HR, Max.HR, Aerobic.TE, Avg.Run.Cadence, Max.Run.Cadence, Avg.Pace, Best.Pace, Total.Ascent, Total.Descent, Avg.Stride.Length, Min.Temp, Max.Temp, Best.Lap.Time, Moving.Time, Elapsed.Time, Runner, Number.of.Laps) %>% mutate(Activity.Type = as.factor(Activity.Type),Date = as.Date(Date), Total.Ascent = as.numeric(Total.Ascent), Total.Descent = as.numeric(Total.Descent), Aerobic.TE=as.numeric(Aerobic.TE), Avg.HR = as.numeric(Avg.HR), Max.HR = as.numeric(Max.HR), Max.Run.Cadence = as.numeric(Max.Run.Cadence), Avg.Run.Cadence = as.numeric(Avg.Run.Cadence)) %>% mutate(Best.Pace = (as.numeric(Best.Pace)/3600), Moving.Time = (as.numeric(Moving.Time)/3600), Best.Lap.Time = (as.numeric(Best.Lap.Time)/3600), Elapsed.Time = (as.numeric(Elapsed.Time)/3600), Time = as.numeric(Time)/3600) %>%
+  mutate(Distance = case_when(
+    Activity.Type == "Track Running" ~ Distance / 1000,
+    TRUE ~ Distance
+  ))
+
+
+
+
+convert_to_hours <- function(time) {
+  if (grepl(":", time)) {
+    # If time contains minutes and seconds
+    parts <- strsplit(time, ":")[[1]]
+    hours <- as.numeric(parts[1]) + as.numeric(parts[2]) / 60
+  } else {
+    # If time is in seconds only
+    hours <- as.numeric(time) / 3600
+  }
+  return(hours)
+}
+   
+ft_dta$Avg.Pace <- sapply(ft_dta$Avg.Pace, convert_to_hours)
+
+split_dta <- ft_dta %>% split(ft_dta$Runner)
+
+collie_dta01 <- as_tibble(split_dta$Collie)
+hound_dta01 <- as_tibble(split_dta$Hound)
+
+```
+
+```{r echo=FALSE, results='hide', message=FALSE, warning=FALSE, error=FALSE}
+suppressWarnings({
+  
+library(patchwork)
+library(skimr)
+library(gridExtra)
+
+plot0001 <- hound_dta01 %>% filter(Distance<30)%>% ggplot(aes(x=Distance, y= Avg.Pace)) + geom_point() + labs(title = "Hound", x= "Distance (km)", y="Average Pace (min per km)") +  geom_boxplot(alpha = 0.5, col = adjustcolor("red"))
+
+plot0002 <- collie_dta01 %>% ggplot(aes(x=Distance, y= Avg.Pace)) + geom_point() + labs(title = "Collie", x= "Distance (km)", y="Average Pace (min per km)")+ geom_boxplot(alpha = 0.5, col = adjustcolor("red"))
+
+plot0001|plot0002
+
+})
+```
+
+On average Collie runs faster than Hound. Also Hound has more variability in his Pace compared to Collie. Each factor, distance and speed, contributes to the difficulty of the run, where faster and longer runs strictly dominate shorter and slower runs, given other conditions are held constant. Let's consider how difficulty factors effect average heart rate:
+
+```{r, echo=FALSE, results='hide', message=FALSE, warning=FALSE, error=FALSE}
+data %>% 
+  dplyr::mutate(Avg.HR = as.numeric(Avg.HR)) %>%
+  ggplot(aes(x = Avg.HR)) +
+  geom_histogram(aes(y=..count../sum(..count..)), bins = 50) +
+  facet_grid(.~Runner) +
+  labs(y = "Density", x = "Average Heart Rate (bpm)", title = "How hard is each runners heart typically working?")
+```
+
+Given that Collie runs faster than Hound, we observe here that Hound has faster average heart rates, suggesting Collie has more cardiovascular strength given they run relatively long interval of 10km fairly often. We might suggest then that Collie has more cardiovascular strength overall.
+
+```{r, echo=FALSE, results='hide', message=FALSE, warning=FALSE, error=FALSE}
+data %>% 
+  dplyr::mutate(Avg.HR = as.numeric(Avg.HR)) %>%
+  ggplot(aes(x = Avg.HR, y = Average_Speed_MPS, col = Index)) +
+  geom_point() +
+  geom_hline(aes(yintercept=3)) +
+  facet_grid(.~Runner) + labs(x="Average Heart Rate (bpm)", y="Average Speed (mps)", title = "How speed and heart rate relate:")
+```
+
+Collie has a stronger relationship between speed and average heart rate. We find ourselves questioning why a similar strong linear relationship doesn't hold for Hound. We can also see that Collie performs better on runs later in his career than earlier runs. The same can be said for Hound, with many of their later runs demonstrating the best performance, however the results are less pronounced, with many of their later runs also being associated with low performance. Let's consider now the regression, which predicts average heart rate (dependent variable):
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+individual_reg <- data %>% 
+  dplyr::select(Avg.HR, Distance_KM, Average_Speed_MPS,  
+                Total.Ascent, Total.Descent, Index, Runner)
+
+hound_reg <- individual_reg %>%
+  dplyr::filter(Runner == "Hound") %>%
+  dplyr::ungroup() %>%
+  dplyr::select(-Runner) %>%
+  stats::lm(Avg.HR ~ Distance_KM + Average_Speed_MPS +
+                Total.Ascent + Index, data = .)
+
+collie_reg <- individual_reg %>%
+  dplyr::filter(Runner == "Collie") %>%
+  dplyr::ungroup() %>%
+  dplyr::select(-Runner) %>%
+  stats::lm(Avg.HR ~ Distance_KM + Average_Speed_MPS +
+                Total.Ascent + Index, data = .)
+
+graph_collie_in <- individual_reg %>% dplyr::filter(Runner == "Collie") %>% dplyr::ungroup() %>%dplyr::select(-Runner)
+
+```
+
+#### Collie Average Heart Rate Regression:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+c_summary_hr  <- broom::tidy(collie_reg)
+
+
+c_stats_hr <- data.frame(term = c("R-squared", "Adjusted R-squared", "F-statistic", "p-value"),
+                             estimate = c(summary(collie_reg)$r.squared, 
+                                          summary(collie_reg)$adj.r.squared,
+                                          summary(collie_reg)$fstatistic[1],
+                                          "0.00000"))
+
+kable(c_stats_hr, format = "markdown", size = "small")
+kable(c_summary_hr, format = "markdown", size = "small")
+autoplot(collie_reg)
+```
+
+We see for Collie we have a moderate R squared, which is expected for the semi strong linear relationship seen in the scatter plot. We see that as run index increases, a marginal but statistically significant heart rate decrease of -0.03 occurs per run. Given how low our R-Squared is (\~38%), we conclude that habitual running over time does decrease average heart rate significantly, but in such small increments that other factors can quickly thwart its effect in the short term. This is evidence that Collie is increasing their cardiovascular strength over time!
+
+#### Hound Average Heart Rate Regression:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+h_summary_hr  <- broom::tidy(hound_reg)
+
+
+h_stats_hr <- data.frame(term = c("R-squared", "Adjusted R-squared", "F-statistic", "p-value"),
+                             estimate = c(summary(hound_reg)$r.squared, 
+                                          summary(hound_reg)$adj.r.squared,
+                                          summary(hound_reg)$fstatistic[1],
+                                          "0.00000"))
+
+kable(h_stats_hr, format = "markdown", size = "small")
+kable(h_summary_hr, format = "markdown", size = "small")
+autoplot(hound_reg)
+```
+
+Not surprisingly, Hounds regression fits significantly worse. 10% R squared gives this model abysmal predictive power. Why is hounds regression behaving so poorly? We expect that as as certain factors increase such as distance, average speed and elevation gain, that heart rate will also increase. There are certain factors that can disrupt this though, and it all has to do with how elevated heart rate and average speed work. When a runner sprints, their heart rate will remain elevated long after the sprint is completed as the body replenishes its oxygen reserve and attempts to return to homeostasis. As such, a runner who sprints for 1 minute, and stands still the next minute may have a much higher average heart rate for having half an average speed, in comparison to if only the first minute interval was measured. Because of reasons to follow in the section titled:**(A case for clustering)**, we expect Collie records their start and end more consistently, without warm ups and cool downs included. This leads to a more consistent fit overall. Hound on the other hand, has messier data which may behave differently from observation to observation due to a multitude of factors. For now, lets pivot to another measure: Aerobic Training Effect (Aerobic TE).
+
+#### Note: Regressions Comparison
+
+Due to the poor fit of the regression model to Hound, we are unable to draw comparative conclusions between the two runners. For now, it is better to draw conclusions within each data set than draw direct comparisons between datasets, due to the range and model fit issues discussed previously.
+
+```{r Aftikhar_correlation, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+
+
+cdta <- collie_dta01 %>% dplyr::select(Distance, Calories, Avg.HR, Max.HR, Aerobic.TE, Avg.Run.Cadence, Avg.Pace, Total.Ascent, Total.Descent, Avg.Stride.Length, Max.Temp, Min.Temp, Max.Run.Cadence)
+cormat_collie <- stats::cor(cdta, method = "kendall", use = "pairwise.complete.obs")
+
+hdta <- hound_dta01 %>% dplyr::select(Distance, Calories, Avg.HR, Max.HR, Aerobic.TE, Avg.Run.Cadence, Avg.Pace, Total.Ascent, Total.Descent, Avg.Stride.Length, Max.Temp, Min.Temp, Max.Run.Cadence)
+cormat_hound <- stats::cor(hdta, method = "kendall", use = "pairwise.complete.obs")
+
+
+```
+
+```{r, echo=FALSE, results='hide', message=FALSE, warning=FALSE, error=FALSE}
+library(zoo)
+library(factoextra)
+library(gridExtra)
+
+hound_ <- hound_dta01 %>% select(!c(Title, Activity.Type, Date, Runner)) %>%  na.fill(0) %>% scale()
+collie_ <- collie_dta01 %>% select(!c(Title, Activity.Type, Date, Runner)) %>%  na.fill(0) %>% scale()
+
+t1 <- fviz_nbclust(hound_, kmeans, method = "wss") + ggtitle("Hound")
+t2 <- fviz_nbclust(hound_, kmeans, method = "silhouette") + ggtitle("Hound")
+
+t4 <- fviz_nbclust(collie_, kmeans, method = "wss") + ggtitle("Collie")
+t5 <- fviz_nbclust(collie_, kmeans, method = "silhouette") + ggtitle("Collie")
+
+
+
+h_clusterred <-  hound_dta01 %>% select(!c(Title, Activity.Type, Date, Runner)) %>% na.fill(0) %>% scale() %>% kmeans(centers = 3) 
+c_clusterred <-  collie_dta01 %>% select(!c(Title, Activity.Type, Date, Runner)) %>% na.fill(0) %>% scale() %>% kmeans(centers = 3)
+
+
+
+hound_dta01 <- hound_dta01 %>% mutate(cluster = h_clusterred$cluster)
+collie_dta01 <- collie_dta01 %>% mutate(cluster = c_clusterred$cluster)
+
+
+ 
+
+plot4 <- fviz_cluster(kmeans(hound_, centers = 3), data = hound_) + ggtitle("Hound")
+plot5 <- fviz_cluster(kmeans(collie_, centers = 3), data = collie_) + ggtitle("Collie")
+
+
+
+```
+
+## Aerobic Training Effect (Aerobic TE)
+
+Aerobic Training Effect (Aerobic TE) is a 0 to 5 score based measure of the body's excess oxygen consumption after exercise. It is predicted using heart rate data, potentially in combination with other metrics in order to improve model fit. We can think of it as an overall measure of exertion. Too little exertion and our dear runner reverts to an innate and couchbound state. Too much exertion requires significant multi-day recovery from the body. Just the right amount of exertion will maintain or improve cardiovascular and respiratory health over time. Below is a scale which can help us interpret Aerobic TE, taken from mastersoftri.com:
+
+TE SCALE 0-5 Both the aerobic and anaerobic TE have a scale of 0-5 to identify the impact of the activity:
+
+0.0 – 0.9 = no effect
+
+1.0 – 1.9 = minor effect
+
+2.0 – 2.9 = maintaining effect
+
+3.0 – 3.9 = improving effect
+
+4.0 – 4.9 = highly improving effect
+
+5.0 = overreaching/overloading effect
+
+https://mastersoftri.com/training-effect-what-is-it-and-do-you-take-notice-of-it/
+
+Aerobic TE offers us some advantages over heart rate. Firstly, Aerobic TE is a cumulative measure. This is important because it remedies one of our limitations in our data set; that being we don't have highly granular data for each run. If we were able to see each run in depth and by the second know the average speed, heart rate, elevation gain etc, we would be able to build much better model of each runners endurance. Data in this format would make visible the process by which each runners body tires. Since we don't have this, Aerobic TE becomes the next best measure. It's cumulative score incorporates granular information about exertion over time, which gives us a better understanding of how trying each run was for the runner. If you're still doubtful about the effectiveness of Heart Rate over Aerobic TE, consider the following cases:
+
+You are frightened suddenly during a horror movie -- You're heart rate suddenly rises, creating an above normal maximum. However it will (hopefully) quickly subside. The scare offered no benefit to your health because the elevated heart rate was not sustained and no exercise occured.
+
+You walk for 8 minutes and sprint for 2 minutes, or you jog for 10 minutes, with both providing the same average heart rate -- In this situation, we expect the two activities to have differing effects on the body despite measuring the same average. One will have a higher heart rate at the end of the interval and one will have a lower heart rate over the duration but will have had sustained an elevated hear rate for longer.
+
+You sprint for 1 minute versus you sprint for 5 minutes, with average heart rate being equal for both intervals -- In this situation we observe the same measurable average speed and heart rate, however we still face the issue of modelling the effect on health, since intuitively we know the longer duration of exercise is better than the shorter duration, up to an upper limit of healthy exertion.
+
+By this point, you should be convinced that Aerobic TE is a stronger measurement. It is scaled to be easily interpreted, incorporates granular data not accessible to us, and gives us a better understanding of how far each run has pushed the runners body out of homeostasis. It's primary shortcoming is its non-linear mapping, since the numeric ranges are more qualitative than quantitative; the underlying functional model may be piece wise since the range which qualifies as having little to no Aerobic Effect likely maps very differently than the range mapping full exhaustion.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+under_10KM <- data %>% dplyr::filter(Distance_KM <= 10) %>%
+  dplyr::group_by(Runner, Date) %>%
+  dplyr::mutate(temp = 1, Runs_Today = cumsum(temp)) %>%
+  dplyr::select(-temp) %>%
+  dplyr::filter(Runs_Today==1) %>%
+  dplyr::mutate(temp = as.numeric(Avg.HR)) %>% dplyr::select(-Avg.HR) %>% dplyr::rename(Avg.HR = temp)
+
+under_10KM %>% ggplot(aes(x=Average_Speed_MPS, y=Aerobic.TE, col = Date)) +
+  geom_point() +
+  facet_grid(.~Runner) +
+  labs(title = "Runs under 10 kilometers, Aerobic TE versus Speed", x = "Average Speed (mps)", y = " Aerobic Training Effect")
+```
+
+We see that Collie and Hound have both reached an Aerobic TE of 5, but hound has reached the upper threshold with a lower average speeds than Collie. Collie also shows improvement in their aerobic strength, with the most recent runs having lower Aerobic TE on average given a similar level of speed.
+
+Note that Aerobic TE solves some of the issues with average heart rate for hounds data, because taking a break will result in a documented return to homeostasis as opposed to continuing intense exercise under accumulated oxygen deprivation. Issues with Hounds data will be discussed further in **A case for clustering.**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+data_cor %>% ggplot(aes(x = Calories, y = Aerobic.TE, col = Distance_KM)) +
+  geom_point() +
+  facet_grid(.~Runner) +
+  labs(title = "Collie gets more bang for buck:", subtitle = "Less Calories and Shorter Distance", y = "Aerobic Training Effect")
+```
+
+Here we see Collie gets much more Aerobic Training Effect for less. This is definitely caused by higher speeds when training, and it suggests that in terms of improving cardiovascular strength, Collie is more promising since
+
+a)  Calories is a unit related to work and distance covered, as shown by the gradient, and...
+
+b)  Shorter runs take less time.
+
+If our goal is to improve speed efficiently, Collie is going to perform better, since they don't require the same amount of time to get the same benefits, due to the faster pace they take. This alligns with the differences in cardiovascular improvement seen between Hound and Collie in the previous graph.
+
+## A case for clustering
+
+**As mentioned in previous sections, there are a few issues with Hound data that suggests our analysis up to this point hasn't been entirely fair. This is revealed to us by the titling tendency for each of Hounds workouts:**
+
+```{r, echo=FALSE, results='hide', message=FALSE, warning=FALSE, error=FALSE}
+data %>% 
+  dplyr::mutate(interval = str_detect(tolower(Title), pattern = "[0-9]+[x*][0-9]+|interval|repeat", negate = F)) %>%
+  dplyr::filter(interval == T)
+
+data %>% 
+  dplyr::mutate(easy = str_detect(tolower(Title), pattern = "easy|slow", negate = F)) %>%
+  dplyr::filter(easy == TRUE)
+
+data %>% 
+  dplyr::mutate(warmup = case_when(str_detect(tolower(Title), pattern = "warmup", negate = F) ~ TRUE,
+                                          str_detect(tolower(Title), pattern = "wu", negate = F) ~ TRUE,
+                                          TRUE ~ FALSE)) %>%
+  dplyr::filter(warmup == TRUE)
+
+data %>% 
+  dplyr::mutate(tempo = str_detect(tolower(Title), pattern = "tempo", negate = F)) %>%
+  dplyr::filter(tempo == TRUE)
+
+data %>% 
+  dplyr::group_by(Runner, Date) %>%
+  dplyr::mutate(temp = 1, runs_in_day = sum(temp)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(cool_down = case_when(str_detect(tolower(Title), pattern = "cooldown|post|cool down|kool", negate = F) ~ TRUE,
+                                          str_detect(tolower(Title), pattern = "cd", negate = F) ~ TRUE,
+                                          TRUE ~ FALSE)) %>%
+  dplyr::filter(cool_down == TRUE)
+
+# requires workout removal
+data %>% 
+  dplyr::mutate(with = str_detect(tolower(Title), pattern = "with", negate = F)) %>%
+  dplyr::filter(with == TRUE)
+
+# Requires training removal, tempo removal
+data %>% 
+  dplyr::mutate(race = str_detect(tolower(Title), pattern = "race|marathon|[0-9]+k|run for life|home made half|myeloma|rosliget|miles of christmas", negate = F)) %>%
+  dplyr::filter(race == TRUE)
+
+data %>% 
+  dplyr::mutate(recovery = str_detect(tolower(Title), pattern = "recovery", negate = F)) %>%
+  dplyr::filter(recovery == TRUE)
+
+data %>% dplyr::mutate(sunday = str_detect(tolower(Title), pattern = "sunday", negate = F)) %>%
+  dplyr::filter(sunday == TRUE)
+
+data %>% dplyr::mutate(workout = str_detect(tolower(Title), pattern = "workout|runlab|triathlon|brick", negate = F)) %>%
+  dplyr::filter(workout == TRUE)
+
+data %>% 
+  dplyr::mutate(part_x = str_detect(tolower(Title), pattern = "part [0-9]|part", negate = F)) %>%
+  dplyr::group_by(Runner, Date) %>%
+  dplyr::mutate(temp = 1, runs_in_day = sum(temp)) %>%
+  dplyr::ungroup() %>%
+  dplyr::filter(part_x == TRUE)
+
+data %>%
+  dplyr::group_by(Runner, Date) %>%
+  dplyr::mutate(temp = 1, runs_in_day = sum(temp)) %>%
+  dplyr::ungroup() %>%
+  dplyr::filter(runs_in_day > 1)
+
+
+data %>% 
+  dplyr::mutate(counted = str_detect(tolower(Title), 
+                                     pattern = "with|cooldown|cd|warmup|wu|tempo|easy|[0-9]+[x*][0-9]+|race|interval|slow|repeat|recovery|part [0-9]|part|post|cool down|sunday|marathon|workout|runlab|[0-9]+k|triathlon|run for life|brick|home made half|kool|myeloma|rosliget|miles of christmas", 
+                                     negate = F)) %>%
+  dplyr::filter(counted == FALSE) %>%
+  dplyr::filter(Runner == "Hound")
+
+temp <- data %>% dplyr::filter(Runner == "Collie")
+sort(unique(temp$Title))
+  
+```
+
+**1. Hound sometimes runs with other people.**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+data %>% 
+  dplyr::mutate(with = str_detect(tolower(Title), pattern = "with", negate = F)) %>%
+  dplyr::filter(with == TRUE) %>%
+  dplyr::ungroup() %>%
+  head(n=3) %>% dplyr::select(Title) %>%
+  kable()
+```
+
+**2. Hound sometimes runs after another workout activity / Sometimes Hound chains runs back to back.**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+data %>% 
+  dplyr::mutate(with = str_detect(tolower(Title), pattern = "brick", negate = F)) %>%
+  dplyr::filter(with == TRUE) %>%
+  dplyr::ungroup() %>%
+  head(n=3) %>% dplyr::select(Title, Date) %>%
+  kable()
+```
+
+**3. Hound sometimes runs in races.**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+data %>% 
+  dplyr::mutate(with = str_detect(tolower(Title), pattern = "race", negate = F)) %>%
+  dplyr::filter(with == TRUE) %>%
+  dplyr::ungroup() %>%
+  head(n=3) %>% dplyr::select(Title) %>%
+  kable()
+```
+
+**4. Hound sometimes records warmup and cooldown as part of their training interval.**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+data %>% 
+  dplyr::mutate(with = str_detect(tolower(Title), pattern = "wu|cd", negate = F)) %>%
+  dplyr::filter(with == TRUE) %>%
+  dplyr::ungroup() %>%
+  head(n=3) %>% dplyr::select(Title) %>%
+  kable()
+```
+
+**5. Hound sometimes does interval training, which combines rest with shorter faster sprints.**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+data %>% 
+  dplyr::mutate(with = str_detect(tolower(Title), pattern = "[0-9]+[*x][0-9]+", negate = F)) %>%
+  dplyr::filter(with == TRUE) %>%
+  dplyr::ungroup() %>%
+  head(n=3) %>% dplyr::select(Title) %>%
+  kable()
+```
+
+**6. Hound sometimes takes "easy" or "recovery" runs, which makes sense given the longer duration of other runs.**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+data %>% 
+  dplyr::mutate(with = str_detect(tolower(Title), pattern = "easy|recovery", negate = F)) %>%
+  dplyr::filter(with == TRUE) %>%
+  dplyr::ungroup() %>%
+  head(n=3) %>% dplyr::select(Title) %>%
+  kable()
+```
+
+**Further evidence of workout splitting can be found by comparing the percentage of time is spent not moving between our runners:**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+data %>% 
+  dplyr::filter(stop_ratio < 0.25) %>%
+  ggplot(aes(x=stop_ratio)) +
+  geom_histogram(aes(y=..count../sum(..count..)), bins = 100) +
+  facet_grid(.~Runner) +
+  labs(x = "Percentage time spent stopped", y = "Density", title = "Who spends a greater proportion of a run not moving?")
+```
+
+**Collie is far more consistent in terms of data capturing movement, without intervals in between. A heuristic which demonstrates Collie's consistency can be found by seeing their full list of Collie's run titles:**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+temp <- data %>% dplyr::filter(Runner == "Collie")
+kable(sort(unique(temp$Title)), col.names = "Title")
+```
+
+This is why we suggest Collie is more consistent with their recording habits leading to better regressions overall. They remain flawlessly consistent in their titling regimen, without typo or capitalization errors that lead to a duplicate entry. They are more tidy and therefore more likely to remain diligent in what they record each run.
+
+Because Hounds warm ups, interval training, and other preceding workout activities, can greatly affect recorded performance, it becomes difficult to consistently model their behavior. Here is our main supporting point as to why we used clustering for the final portion of our analysis. We can gather only the highest performing and self similar grouping, which should account for behavioral differences which occur with other runs. Grouping by self similarity should hopefully remove runs affected by other factors not recorded in the title, allowing us to focus on performance more specifically. We used unsupervised machine learning (k-means clustering) to find patterns and structure within our data.
+
+## Clustering
+
+```{r echo=FALSE, results='hide', message=FALSE, warning=FALSE, error=FALSE}
+
+combined_all <- grid.arrange(t1, t4, nrow = 1)
+
+```
+
+From total within sum of square, using the knee rule we can choose 3 no. of clusters for both runners; and it is supported by the silhouette width graph for both runners. Therefore for Hound and Collie we will use 3 clusters of data each.
+
+```{r echo=FALSE, results='hide', message=FALSE, warning=FALSE, error=FALSE}
+
+combined_all_v <- grid.arrange(plot4, plot5, ncol = 1)
+
+```
+
+The above grouping graph demonstrates feature similarity. Each data point is assigned a cluster. The shaded region represents the outer boundaries of a cluster. In simple terms, we are using unsupervised machine learning to group by similar features to draw better comparisons overall by comparing each runners best performance over time. Better clusters are defined as having data tighter fitting to their centers and with less overlap between 2 different clusters boundaries.
+
+\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_
+
+```{r, echo=FALSE, results='hide', message=FALSE, warning=FALSE, error=FALSE}
+pp001 <- hound_dta01 %>% ggplot(aes(x=Max.HR, y=Max.Run.Cadence, col=(as.character(cluster)))) + geom_point() + labs (col = "Cluster", title = "Hound")
+
+pp002 <- collie_dta01 %>% ggplot(aes(x=Max.HR, y=Max.Run.Cadence, col=(as.character(cluster)))) + geom_point() + labs (col = "Cluster", title = "Collie")
+
+
+
+
+pp003 <- hound_dta01 %>% ggplot(aes(x=Distance, y=Avg.Pace, col=(as.character(cluster)))) + geom_point() + labs (col = "Cluster", title = "Hound")
+
+pp004 <- collie_dta01 %>% ggplot(aes(x=Distance, y=Avg.Pace, col=(as.character(cluster)))) + geom_point() + labs (col = "Cluster", title = "Collie")
+
+
+```
+
+```{r, echo=FALSE, results='hide', message=FALSE, warning=FALSE, error=FALSE}
+pp003/pp004
+```
+
+We can see that for each of our runner we see clusters have different interaction with heart rate and distance. But the good thing is that we can classify each cluster into different type/Distance. For Collie cluster 2 and 3 are blended in this graph.
+
+| Cluster | Interpretation for Collie | Interpretation for Hound |
+|---------|---------------------------|--------------------------|
+| 1       | Short distance running    | Medium distance running  |
+| 2       | Short distance running    | Long distance running    |
+| 3       | Long distance running     | Short distance running   |
+
+```{r echo=FALSE , message=FALSE, warning=FALSE, error=FALSE}
+(pp001+labs(x="Max Heart Rate (bpm)", y = "Max steps/min"))/(pp002+labs(x="Max Heart Rate (bpm)", y = "Max steps/min"))
+
+```
+
+We can see that for Collie has higher run cadence and lower max heart rate in cluster 1. In cluster 3 their max run cadence is low and their range of HR is wider: this means in short distances they sprint and get tired fast, and in longer distance they run slower and let the distance make them tired.
+
+But in case of Hound it is totally different. Simply put, there is no relationship and it seems that his max run cadence is on average 180 no matter the kind of run (cluster) or pace. This matches our general sense of inconsistency that comes from adding exercise and intervals to a workout.
+
+### Testing limits: Max Speed and Heart Rate:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+
+library(patchwork)
+
+pplot01 <- ft_dta %>% ggplot(aes(x=Max.Run.Cadence)) + geom_histogram(aes(y=..density..), bins=30) + 
+  facet_wrap(.~Runner, ncol=1, scales = "free") + labs(x= " Max Run Cadence (steps per minute)", y="Density")
+pplot02 <- ft_dta %>% ggplot(aes(x=Best.Pace)) + geom_histogram(aes(y=..density..), bins=30) + 
+  facet_wrap(.~Runner, ncol=1, scales = "free") + labs(x= " Best Pace (min/km)", y="Density")
+
+
+pplot01 | pplot02
+```
+
+1.  **Run cadence**, which refers to the number of steps a runner takes per minute, can provide insights into a runner's biomechanics and efficiency. A higher run cadence typically suggests that a runner is taking shorter, quicker steps. A higher cadence can also be an indicator of better endurance. It may suggest that the runner is able to sustain a faster pace for longer periods without fatiguing as quickly.
+2.  **Speed and Power**: Running at high speeds requires rapid muscle contractions and explosive power, which can help develop the ability to accelerate quickly and generate force rapidly. This aspect of agility is crucial for swiftly changing direction and evading opponents in sports.
+3.  **Coordination and Balance**: While running fast can improve coordination to some extent, agility also requires precise control and balance during rapid changes in direction. Specific agility drills and exercises targeting coordination and balance, such as lateral movements, multidirectional jumps, and quick changes in direction, may be more effective for improving these aspects of agility.
+
+Collie has higher max run cadence at higher frequency that is why his best pace density graph is left tailed. Whereas Hound has lower frequency of max run cadence and his best pace density is is right tailed. In other words, when sprinting Collie takes more steps than Hound and therefore is faster than Hound in a sprint. Therefore, he is more agile and the probability of his muscle coordination and balance is higher than that of Hound's. This matches with our assessment of stride length versus speed to follow. Collie is more agile.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE, eval = FALSE}
+
+suppressMessages({
+
+plot_106 <- hound_dta01 %>% ggplot(aes(x=Best.Pace, y=Max.HR)) + geom_point(aes(col=Distance)) + scale_color_gradient(low = "blue", high = "yellow") +geom_violin(alpha = 0.2) + labs(title="Hound", x= "Best pace (mins/KM)", y= "Max HR (bpm)")
+
+plot_107 <- collie_dta01 %>% ggplot(aes(x=Best.Pace, y=Max.HR)) + geom_point(aes(col=Distance)) + scale_color_gradient(low = "blue", high = "yellow") +geom_violin(alpha = 0.2) + labs(title="Collie", x= "Best pace (mins/KM)", y= "Max HR (bpm)")
+
+plot_106 | plot_107
+
+})
+
+```
+
+Hound experiences heart rate of 180 - 200 at range of 3 - 5 best pace, whereas Collie experiences the same hear rate at a pace 4.5 - 5. It means Collie Can run faster and still his heart is not as tired as Hound's.
+
+1. Most of outliers for Hound are towards the right side and Collie's are towards left side. Hound is slower and Collie is fast. Hound data also exhibits higher variance at higher heart rates.
+
+2. As Collie runs faster his heart rate increases, for Hound in the same pace he has a wide range of max heart rates. This is observable in the leftward drift in Collies data as heart rate goes up. In other words, Collie's data outside the shape are showing short distance, fast speed and high heart rate. Whereas Hound's data shows moderate distance, slower speed, and random values of heart rate.
+
+Therefore: Collie may excel in sprinting or short-distance running activities that require bursts of speed and high cardiovascular intensity. Hound's performance is characterized by slower speeds compared to Collie.
+
+However, there is something interesting for Hound: The random heart rate values suggest variability in cardiovascular response during running. Since Hound does a variety of different activities such as workouts, BRICK, intervals and races, this could lead to the kind of observed inconsistency. [**In short, Hound could be more coachable and more fit overall due to the variety of strains applied to their body, since they have also participated in biking, swimming, endurance and speed running**]{.underline}. This can help is in making a decision which runner to choose for our trainer.
+
+------------------------------------------------------------------------
+
+## Improvement
+
+#### Stride:
+
+Stride length often decreases with age. As you get older, you experience a natural decline in flexibility, joint mobility, and muscle elasticity, which can result in shorter strides. However, maintaining a regular exercise routine and flexibility training can help prevent some of these age-related changes. First, lets take a look at how stride responds to speed for each of our runners and then discuss changes over time.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+stride_reg <- data_cor %>%
+  dplyr::mutate(temp = Avg.Stride.Length*3.3333-1.16666) %>%
+  dplyr::filter(Average_Speed_MPS > temp) %>%
+  dplyr::select(-temp) %>%
+  dplyr::filter(Avg.Stride.Length > 0.2)
+
+
+stride_hound_reg <- stride_reg %>%
+  dplyr::filter(Runner == "Hound") %>%
+  dplyr::select(Average_Speed_MPS, Avg.Stride.Length)
+
+stride_hound_reg <- stats::lm(Average_Speed_MPS ~ Avg.Stride.Length, data = stride_hound_reg)
+hound_stride_speed <- broom::tidy(stride_hound_reg)
+
+
+stride_collie_reg <- stride_reg %>%
+  dplyr::filter(Runner == "Collie") %>%
+  dplyr::select(Average_Speed_MPS, Avg.Stride.Length)
+
+stride_collie_reg <- stats::lm(Average_Speed_MPS ~ Avg.Stride.Length, data = stride_collie_reg)
+collie_stride_speed <- broom::tidy(stride_collie_reg)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+stride_graph_data <-  data_cor %>% dplyr::mutate(temp = Avg.Stride.Length*3.3333-1.16666) %>%
+  dplyr::mutate(Outliers = case_when(Avg.Stride.Length < 0.2 ~ "Excluded",
+                                     Average_Speed_MPS > temp ~ "Included",
+                                    TRUE ~ "Excluded")) %>%
+  dplyr::select(-temp)
+stride_graph_data$Outliers <- factor(stride_graph_data$Outliers, levels = c("Included", "Excluded"))
+
+stride_hound_G1 <- stride_graph_data %>% 
+  dplyr::filter(Runner=="Hound") %>%
+  ggplot(aes(x = Avg.Stride.Length, y = Average_Speed_MPS, col = Outliers)) +
+  geom_point() +
+  facet_grid(.~Runner) + 
+  scale_fill_manual(c("Included", "Excluded")) +
+  geom_abline(intercept = hound_stride_speed$estimate[1], 
+              slope = hound_stride_speed$estimate[2]) +
+  xlim(0.7,1.3) +
+  ylim(1.5,4) +
+  labs(x = "Stride Length (m)", y = "Avg Speed (mps)")
+
+stride_collie_G1 <- stride_graph_data %>% 
+  dplyr::filter(Runner=="Collie") %>%
+  ggplot(aes(x = Avg.Stride.Length, y = Average_Speed_MPS, col = Outliers)) +
+  geom_point() +
+  facet_grid(.~Runner) + 
+  geom_abline(intercept = collie_stride_speed$estimate[1], 
+              slope = collie_stride_speed$estimate[2]) +
+  xlim(0.7,1.3) +
+  ylim(1.5,4) +
+  labs(x = "Stride Length (m)", y = "Avg Speed (mps)") +
+  theme(legend.position = "none")
+
+
+stride_collie_G1 | stride_hound_G1
+
+regression_fit_c <- broom::glance(stride_collie_reg) %>% dplyr::select(r.squared, sigma, p.value)
+
+regression_fit_h <- broom::glance(stride_hound_reg) %>% dplyr::select(r.squared, sigma, p.value)
+```
+
+Above shows the tight fitting relationship between stride length and speed for Hound and Collie. We note the differing slopes, and will demonstrate in the regressions below that these models are a good fit (high R sqaured, low p-values on all t-tests), and that the differences between each runner is statistically significant:
+
+##### Collie Regression:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+
+
+c_summary_stride <- data.frame(term = c("R-squared", "Adjusted R-squared", "F-statistic", "p-value"),
+                             estimate = c(summary(stride_collie_reg)$r.squared, 
+                                          summary(stride_collie_reg)$adj.r.squared,
+                                          summary(stride_collie_reg)$fstatistic[1],
+                                          "0.00000"))
+
+kable(c_summary_stride, format = "markdown", size = "small")
+kable(collie_stride_speed, format = "markdown", size = "small")
+```
+
+##### Hound Regression:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+
+
+h_summary_stride <- data.frame(term = c("R-squared", "Adjusted R-squared", "F-statistic", "p-value"),
+                             estimate = c(summary(stride_hound_reg)$r.squared, 
+                                          summary(stride_hound_reg)$adj.r.squared,
+                                          summary(stride_hound_reg)$fstatistic[1],
+                                          "0.00000"))
+
+kable(h_summary_stride, format = "markdown", size = "small")
+kable(hound_stride_speed, format = "markdown", size = "small")
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+# Hound
+n_hound <- stride_reg %>% 
+  dplyr::filter(Runner == "Hound") %>%
+  count(.$Runner) %>%
+  dplyr::select(n)
+
+n_collie <- stride_reg %>% 
+  dplyr::filter(Runner == "Collie") %>%
+  count(.$Runner) %>%
+  dplyr::select(n)
+
+hound_diff_t <- (hound_stride_speed$estimate[2]-collie_stride_speed$estimate[2])/hound_stride_speed$std.error[2]
+
+collie_diff_t <- (collie_stride_speed$estimate[2]-hound_stride_speed$estimate[2])/collie_stride_speed$std.error[2]
+
+p_hound <- pt(hound_diff_t, as.numeric(n_hound)-2)*2
+p_collie <- pt(-collie_diff_t, as.numeric(n_collie)-2)*2
+```
+
+We test that the slopes for each runner are statistically different from the other by taking the difference and dividing by the standard error of the slope we are testing. We find the p-value of hound to be `r p_hound` and Collie to be `r p_collie`, indicating significant difference between the two. This is exciting because our models provide strong evidence of physical differences between our two runners. This could be differences in height, weight, leg strength, flexibility, and running form. Because of the tight fitting relationship, we can put more emphasis on if a change is observed in small increments in terms of assessing improvement over time.
+
+If a runners stride length increases, this could be cause by a multitude of factors, all which indicate an improvement. Our runner is/has:
+
+1.  Lost weight. A lighter runner can bound forward more with each stride, due to their leg muscle needing to move less weight.
+2.  Improved leg strength. Stronger legs can bound forward more.
+3.  Improved flexibility/range of motion.
+4.  Has increased their pace.
+5.  Has made an adjustment in their running form. This ones more impartial, since a shorter stride or longer stride form comes with different trade offs.
+
+In general, we will consider a longer stride as a demonstration of increased dexterity. Lets examine our runners and see how their stride length changed over time:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+
+suppressWarnings({
+
+graph01 <- hound_dta01 %>% ggplot(aes(x=Date, y= Avg.Stride.Length, col = as.character(cluster)))+
+  geom_point() +
+  geom_smooth(method= "loess", col="green") + labs(title = "Hound", col = "cluster")
+
+graph02 <- collie_dta01 %>% filter(Avg.Stride.Length>0.85) %>% ggplot(aes(x=Date, y= Avg.Stride.Length, col = as.character(cluster)))+
+  geom_point() +
+  geom_smooth(method= "loess", col="orange") + labs(title = "Collie", col = "cluster")
+
+graph01| graph02
+
+})
+```
+
+We see that there is some increase in average stride length for both of our runners. It means that both of them have improved over time: both have maintained their muscle flexibility and elasticity, potentially increased muscles strength or decreased weight. Collie has a decrease in early 2022, as they take a break, but bounces back. In general Collie shows evidence of a lighter build, maintaining a higher ceiling overall. It's important to note that the sharp improvement in Collie over 2023 indicates a strong bouncing back in stride length and strength, but **doesn't** indicate a breakout effect where stride length continues to improve exponentially. The sharp curve should be interpreted as a rapid return to previous (2021) levels, with the expectation that the rapid recovery quickly levels off. So one point goes to Collie for consistency and elasticity. But it is interesting to see that in recent year Hound started doing more short distance (cluster 3) running. While Collie stopped running during 2022 Hound maintained his dedication towards running and has shifted preferred habitat slightly. Hounds increase in stride length is more indicative of an improvement in terms of strength and flexibility, since it is not preceded as much by a drop in form prior to the increase (unlike Collie). So it would appear Hound has improved more in this category over time in comparison to Collie.
+
+#### Speed
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+suppressWarnings({
+  
+plot005 <- ft_dta %>% filter(Distance>5) %>% ggplot(aes(x=Date, y = 1/Avg.Pace*(1000/60), col=Runner)) +geom_point()+geom_smooth(method = "loess") + labs(y= "Average Pace (mps)")
+  
+plot006 <- ft_dta %>% ggplot(aes(x=Date, y = Avg.HR, col=Runner)) +geom_point()+geom_smooth(method = "loess") + labs(y = "Average Heart Rate (bpm)")
+
+plot005/plot006
+
+})
+```
+
+Both runners' speed has increased over time. But in case of Collie it is more pronounced, so Collie gets the point. The heart rate corresponds to the increase of speed. Both graphs show runners improving their pace over time, but Hound has sustained the change over longer and thus shows more evidence of long term improvement. Note that shorter time frame data sets may curve fit with more extreme slopes through clusters in comparison to longer time frames.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+suppressWarnings({
+plt01 <- hound_dta01 %>% ggplot(aes(x=Date, y=Distance, col=as.character(cluster))) + geom_point() + labs(title = "Hound", col = "Cluster")
+plt02 <- collie_dta01 %>% ggplot(aes(x=Date, y=Distance, col=as.character(cluster))) + geom_point() + labs(title = "Collie", col = "Cluster")
+plt01/plt02
+})
+```
+
+Consistently maintaining a training schedule, and frequently reaching high Aerobic TE scores can be considered a driver of improvement. Progress in running often comes from consistent training over time at moderate intensity. As previously discussed when assessing there habits, Collie has a lower average break between runs. Collie also gets a stronger Aerobic Training Effect per run due to their higher pace.
+
+## Conclusions
+
+#### Who's fitter? Collie
+
+Higher Aerobic Training Effects for less time leads to more frequent instances of a high training effect. Accumulated cardiovascular oxygen deficits occur quicker due to their higher pace, making adequate cardiovascular training possible in shorter runs. Because both runners are professors and fairly busy, this is beneficial, since even when only short amounts of time are available to go for a run, adequate cardiovascular training can be achieved. Collie shows a quick rebound after taking a break in terms of stride length, impressive increases in pace in the last few months, and slightly beats hound on how often they go for runs on average. Hound also gets higher Aerobic Training Effect scores at slightly slower speeds for runs under 10 km, which furthers the point that Collie is slightly fitter. Hound may have been disadvantaged due to a lack of data cleanliness due to other elements affecting the data, such as previous workout activities, warmups and cooldowns included etc, but even after clustering, both showed similar signs of improvement. We have no doubt that Hound would win in an endurance run, and depending on their goals, they may not agree with this assessment for this reason alone, but in this analysis Collie takes the calorie-free cake.
+
+#### Measures of Improvement: Collie
+
+Collie had a regression which actually fit, which gave us the benefit of being able to consider the run index and its marginal effect on average heart rate. We determined that each run Collie took had a statistically significant effect (-0.03) on heart rate, all else constant, which shows incremental improvement over time, all else constant. Collie also bounced back in terms of stride length, had an increase in pace in the last few months, and had consistent habits supporting strong Aerobic Training Effects throughout, which we expect to align with continuous improvement.
+
+#### Measures of Improvement: Hound
+
+Hound has seen some pretty fantastic changes over the course of their running career, one of the most notable being a steady increase in stride length. This suggests physical changes such as a change in weight, muscle strength, form, or flexibility. This is excellent news! Hound has also seen recent up trends in their pace, suggesting improvement in terms of agility as well.
+
+#### Who Improved More? Hound:
+
+This one is difficult, so lets develop an ideal scenario. Ideally, we run regressions on a response variable for both runners which includes a variable for run number or time, we get two models with adequate fit, and then we compare the coefficients for time and determine who improved more with each day or each run. Because of the lack of a satisfactory model for hound, the assessment becomes a lot more qualitative. We think hound improved more, due to a combination of factors. The improvement in stride length suggests changes in weight or muscle strength, which represents an actual improvement compared to Collie's "rebound" behavior. Hound is also has seen more improvements in average pace over time, and is reaching more elevated heart rates as of recently, which suggests a transition to developing aerobic strength during shorter runs. Although Collie has seen recent improvements in terms of pace, we believe that improvement in the other factors mentioned were sustained over a longer period for Hound, and thus we have chosen to give them more heavily weighted consideration.
+
+#### Who do we want to coach?
+
+We want to coach Hound! Hound has demonstrated a vast variety of exercise habits from BRICK workouts to interval training. We think Hound would benefit from reaching higher Aerobic Training Effect scores from shorter runs, by incrementally approaching higher paces for similar distance intervals. We think the recent shifts in stride length suggests strong improvements that have prepared them for reaching these goals, provided no pertinent health issues interfere with this plan and that this is a goal they see the benefit in pursuing. Teaching new running techniques which acheive aerobic strengthening on a tight schedule could provide additional beneficial strategies that ensure greater levels of improvement while fitting their busy schedule.
+
+## Appendix:
+
+The following are optional items considered when forming the analysis but not included.
+
+|     |
+|-----|
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+
+layout_matrix <- matrix(c(1, 2), nrow = 1)
+layout(layout_matrix)
+
+
+
+corrplot::corrplot(
+  corr=cormat_collie,
+  method = "number",
+  type = "lower",
+  title = "Collie",
+  number.cex = 0.4,
+  mar = c(0, 0, 1, 0)
+
+)
+
+corrplot::corrplot(
+  corr=cormat_hound,
+  method = "number",
+  type = "lower",
+  title = "Hound",
+  number.cex = 0.4,
+  mar = c(0, 0, 1, 0)
+)
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+
+hound_vif <- car::vif(hound_reg) 
+collie_vif <- car::vif(collie_reg)
+
+
+kable(hound_vif, format = "markdown", size = "small", col.names = c("VIF"), caption = "Assessing multicollinearity for Hound's regression on Average.HR")
+kable(collie_vif, format = "markdown", size = "small", col.names = c("VIF"), caption = "Assessing multicollinearity for Collie's regression on Average.HR")
+
+```
+
